@@ -160,7 +160,7 @@ class DistributedQwen2ForCausalLM(FromPretrainedMixin, RemoteGenerationMixin, Qw
         return self.model
 
 
-class DistributedMixtralForSequenceClassification(FromPretrainedMixin, Qwen2ForSequenceClassification):
+class DistributedQwen2ForSequenceClassification(FromPretrainedMixin, Qwen2ForSequenceClassification):
     _keys_to_ignore_on_load_missing = DistributedQwen2Model._keys_to_ignore_on_load_missing
     _keys_to_ignore_on_load_unexpected = DistributedQwen2Model._keys_to_ignore_on_load_unexpected
 
