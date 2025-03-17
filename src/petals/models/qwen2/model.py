@@ -5,7 +5,12 @@ import torch
 import torch.nn as nn
 from hivemind.utils.logging import get_logger
 from transformers.modeling_outputs import BaseModelOutputWithPast
-from transformers.models.qwen2 import Qwen2ForCausalLM, Qwen2ForSequenceClassification, Qwen2Model, Qwen2PreTrainedModel
+from transformers.models.qwen2 import (
+    Qwen2ForCausalLM,
+    Qwen2ForSequenceClassification,
+    Qwen2Model,
+    Qwen2PreTrainedModel,
+)
 
 from petals.client.from_pretrained import FromPretrainedMixin
 from petals.client.lm_head import LMHead
@@ -18,7 +23,7 @@ logger = get_logger(__name__)
 
 
 class DistributedQwen2Model(FromPretrainedMixin, PTuneMixin, Qwen2Model):
-    """LlamaModel, but all transformer layers are hosted by the swarm"""
+    """Qwen2Model, but all transformer layers are hosted by the swarm"""
 
     _keys_to_ignore_on_load_missing = PTuneMixin._keys_to_ignore_on_load_missing
     _keys_to_ignore_on_load_unexpected = [r"^model\.layers\."]
@@ -48,6 +53,7 @@ class DistributedQwen2Model(FromPretrainedMixin, PTuneMixin, Qwen2Model):
         output_hidden_states: Optional[bool] = None,
         return_dict: Optional[bool] = None,
         cache_position: Optional[torch.LongTensor] = None,
+        **kwargs,
     ) -> BaseModelOutputWithPast:
         if input_ids is not None and inputs_embeds is not None:
             raise ValueError("You cannot specify both input_ids and inputs_embeds at the same time")
@@ -87,8 +93,18 @@ class DistributedQwen2Model(FromPretrainedMixin, PTuneMixin, Qwen2Model):
         hidden_states = inputs_embeds
         output_shape = input_shape + (hidden_states.size(-1),)
 
+        # Generate position embeddings
+        if position_ids is None:
+            position_ids = torch.arange(
+                past_key_values.seen_tokens if past_key_values is not None else 0,
+                inputs_embeds.shape[1] + (past_key_values.seen_tokens if past_key_values is not None else 0),
+                device=inputs_embeds.device
+            ).unsqueeze(0)
+        position_embeddings = self.rotary_emb(hidden_states, position_ids)
+
         hidden_states = self.layers(
             hidden_states,
+            position_embeddings=position_embeddings,
             prompts=intermediate_prompts,
             hypo_ids=past_key_values.hypo_ids if past_key_values is not None else None,
         )
@@ -113,23 +129,23 @@ class DistributedQwen2Model(FromPretrainedMixin, PTuneMixin, Qwen2Model):
         )
 
     @property
-    def word_embeddings(self) -> nn.Embedding:  # For compatibility with RemoteGenerationMixin
+    def word_embeddings(self) -> nn.Embedding:
         return self.embed_tokens
 
     @property
-    def word_embeddings_layernorm(self) -> nn.Module:  # For compatibility with RemoteGenerationMixin
+    def word_embeddings_layernorm(self) -> nn.Module:
         return nn.Identity()
 
     @property
-    def h(self) -> RemoteSequential:  # For compatibility with RemoteGenerationMixin
+    def h(self) -> RemoteSequential:
         return self.layers
 
     @property
-    def ln_f(self) -> nn.Module:  # For compatibility with RemoteGenerationMixin
+    def ln_f(self) -> nn.Module:
         return self.norm
 
 
-class DistributedLlamaForCausalLM(FromPretrainedMixin, RemoteGenerationMixin, Qwen2ForCausalLM):
+class DistributedQwen2ForCausalLM(FromPretrainedMixin, RemoteGenerationMixin, Qwen2ForCausalLM):
     _keys_to_ignore_on_load_missing = DistributedQwen2Model._keys_to_ignore_on_load_missing
     _keys_to_ignore_on_load_unexpected = DistributedQwen2Model._keys_to_ignore_on_load_unexpected
 
@@ -138,7 +154,6 @@ class DistributedLlamaForCausalLM(FromPretrainedMixin, RemoteGenerationMixin, Qw
     def __init__(self, config: DistributedQwen2Config):
         Qwen2PreTrainedModel.__init__(self, config)
         self.model = DistributedQwen2Model(config)
-        self.pretraining_tp = config.pretraining_tp
         self.vocab_size = config.vocab_size
         self.lm_head = LMHead(config)
 
@@ -149,7 +164,7 @@ class DistributedLlamaForCausalLM(FromPretrainedMixin, RemoteGenerationMixin, Qw
         return self.lm_head
 
     @property
-    def transformer(self) -> DistributedQwen2Model:  # For compatibility with RemoteGenerationMixin
+    def transformer(self) -> DistributedQwen2Model:
         return self.model
 
 
@@ -160,7 +175,7 @@ class DistributedQwen2ForSequenceClassification(FromPretrainedMixin, Qwen2ForSeq
     config_class = DistributedQwen2Config
 
     def __init__(self, config):
-        DistributedQwen2Model.__init__(self, config)
+        Qwen2PreTrainedModel.__init__(self, config)
         self.num_labels = config.num_labels
 
         self.model = DistributedQwen2Model(config)
@@ -170,5 +185,5 @@ class DistributedQwen2ForSequenceClassification(FromPretrainedMixin, Qwen2ForSeq
         self.post_init()
 
     @property
-    def transformer(self) -> DistributedQwen2Model:  # For compatibility with RemoteGenerationMixin
+    def transformer(self) -> DistributedQwen2Model:
         return self.model
